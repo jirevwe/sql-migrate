@@ -125,9 +125,10 @@ func SetIgnoreUnknown(v bool) {
 }
 
 type Migration struct {
-	Id   string
-	Up   []string
-	Down []string
+	Id      string
+	Up      []string
+	Down    []string
+	Version string
 
 	DisableTransactionUp   bool
 	DisableTransactionDown bool
@@ -178,6 +179,7 @@ func (b byId) Less(i, j int) bool { return b[i].Less(b[j]) }
 
 type MigrationRecord struct {
 	Id        string    `db:"id"`
+	Version   string    `db:"version"`
 	AppliedAt time.Time `db:"applied_at"`
 }
 
@@ -208,13 +210,13 @@ var MigrationDialects = map[string]gorp.Dialect{
 }
 
 type MigrationSource interface {
-	// Finds the migrations.
+	// FindMigrations Finds the migrations.
 	//
 	// The resulting slice of migrations should be sorted by Id.
 	FindMigrations() ([]*Migration, error)
 }
 
-// A hardcoded set of migrations, in-memory.
+// MemoryMigrationSource A hardcoded set of migrations, in-memory.
 type MemoryMigrationSource struct {
 	Migrations []*Migration
 }
@@ -243,7 +245,7 @@ func (f HttpFileSystemMigrationSource) FindMigrations() ([]*Migration, error) {
 	return findMigrations(f.FileSystem, "/")
 }
 
-// A set of migrations loaded from a directory.
+// FileMigrationSource A set of migrations loaded from a directory.
 type FileMigrationSource struct {
 	Dir string
 }
@@ -286,16 +288,16 @@ func findMigrations(dir http.FileSystem, root string) ([]*Migration, error) {
 }
 
 func migrationFromFile(dir http.FileSystem, root string, info os.FileInfo) (*Migration, error) {
-	path := path.Join(root, info.Name())
-	file, err := dir.Open(path)
+	filePath := path.Join(root, info.Name())
+	file, err := dir.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("Error while opening %s: %w", info.Name(), err)
+		return nil, fmt.Errorf("error while opening %s: %w", info.Name(), err)
 	}
 	defer func() { _ = file.Close() }()
 
 	migration, err := ParseMigration(info.Name(), file)
 	if err != nil {
-		return nil, fmt.Errorf("Error while parsing %s: %w", info.Name(), err)
+		return nil, fmt.Errorf("error while parsing %s: %w", info.Name(), err)
 	}
 	return migration, nil
 }
@@ -414,7 +416,7 @@ func (p PackrMigrationSource) FindMigrations() ([]*Migration, error) {
 	return migrations, nil
 }
 
-// Migration parsing
+// ParseMigration Migration parsing
 func ParseMigration(id string, r io.ReadSeeker) (*Migration, error) {
 	m := &Migration{
 		Id: id,
@@ -422,9 +424,10 @@ func ParseMigration(id string, r io.ReadSeeker) (*Migration, error) {
 
 	parsed, err := sqlparse.ParseMigration(r)
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing migration (%s): %w", id, err)
+		return nil, fmt.Errorf("error parsing migration (%s): %w", id, err)
 	}
 
+	m.Version = parsed.Version
 	m.Up = parsed.UpStatements
 	m.Down = parsed.DownStatements
 
@@ -565,6 +568,7 @@ func (MigrationSet) applyMigrations(ctx context.Context, dir MigrationDirection,
 		case Up:
 			err = executor.Insert(&MigrationRecord{
 				Id:        migration.Id,
+				Version:   migration.Version,
 				AppliedAt: time.Now(),
 			})
 			if err != nil {

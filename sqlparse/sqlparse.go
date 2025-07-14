@@ -10,12 +10,14 @@ import (
 
 const (
 	sqlCmdPrefix        = "-- +migrate "
+	versionCmdPrefix    = "-- +version "
 	optionNoTransaction = "notransaction"
 )
 
 type ParsedMigration struct {
 	UpStatements   []string
 	DownStatements []string
+	Version        string
 
 	DisableTransactionUp   bool
 	DisableTransactionDown bool
@@ -98,7 +100,7 @@ func parseCommand(line string) (*migrateCommand, error) {
 	return cmd, nil
 }
 
-// Split the given sql script into individual statements.
+// ParseMigration Split the given sql script into individual statements.
 //
 // The base case is to simply split on semicolons, as these
 // naturally terminate a statement.
@@ -169,6 +171,12 @@ func ParseMigration(r io.ReadSeeker) (*ParsedMigration, error) {
 			}
 		}
 
+		if strings.HasPrefix(line, versionCmdPrefix) {
+			// extract the version information
+			p.Version = strings.TrimSpace(line[len(versionCmdPrefix):])
+			continue
+		}
+
 		if currentDirection == directionNone {
 			continue
 		}
@@ -183,16 +191,16 @@ func ParseMigration(r io.ReadSeeker) (*ParsedMigration, error) {
 
 		// Wrap up the two supported cases: 1) basic with semicolon; 2) psql statement
 		// Lines that end with semicolon that are in a statement block
-		// do not conclude statement.
+		// do not conclude the statement.
 		if (!ignoreSemicolons && (endsWithSemicolon(line) || isLineSeparator)) || statementEnded {
 			statementEnded = false
 			switch currentDirection {
 			case directionUp:
 				p.UpStatements = append(p.UpStatements, buf.String())
-
 			case directionDown:
 				p.DownStatements = append(p.DownStatements, buf.String())
-
+			case directionNone:
+				fallthrough
 			default:
 				panic("impossible state")
 			}
